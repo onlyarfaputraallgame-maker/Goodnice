@@ -1,0 +1,292 @@
+-- LUAU-OL :: Blox Fruits Mobile Hub (Auto-Farm + Fly + NoClip)
+-- Purpose: Clean draggable UI for mobile. Teleports to nearby mobs, hits them, flies, and noclips.
+-- Unload: Tap "UNLOAD" on the menu.
+-- MIT
+
+if type(getgenv) ~= "function" then return warn("[mento] getgenv missing, bailing") end
+if getgenv().MentoFarmUnload then pcall(getgenv().MentoFarmUnload) end
+
+local CONFIG = {
+    AutoFarm = false,
+    Fly      = false,
+    NoClip   = false,
+    FlySpeed = 120,
+    FarmDist = 300,
+    FarmRate = 0.2,
+}
+
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS        = game:GetService("UserInputService")
+local player     = Players.LocalPlayer
+if not player then return warn("[mento] no LocalPlayer, bailing") end
+
+local FLY_BIND   = "MentoHubFlyStep"
+local conns      = {}
+local uiConns    = {}
+local vel        = Vector3.zero
+local gui, mainFrame
+local isFarming  = false
+
+-- UI BUILDER ---------------------------------------------------------
+local function createToggle(name, text, layoutOrder)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -20, 0, 40)
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    btn.Text = text .. " : OFF"
+    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 15
+    btn.BorderSizePixel = 0
+    btn.LayoutOrder = layoutOrder
+    btn.Parent = mainFrame
+    
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    
+    local function toggle()
+        CONFIG[name] = not CONFIG[name]
+        btn.Text = text .. " : " .. (CONFIG[name] and "ON" or "OFF")
+        btn.BackgroundColor3 = CONFIG[name] and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(40, 40, 50)
+        btn.TextColor3 = CONFIG[name] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+        return CONFIG[name]
+    end
+    
+    table.insert(uiConns, btn.MouseButton1Click:Connect(toggle))
+    return btn
+end
+
+local function buildUI()
+    local pg = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui")
+    
+    gui = Instance.new("ScreenGui")
+    gui.Name = "MentoMobileHub"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.Parent = pg
+
+    -- Main Window
+    mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.fromOffset(220, 260)
+    mainFrame.Position = UDim2.new(0.5, -110, 0.3, 0) -- Center-ish on screen
+    mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    mainFrame.BackgroundTransparency = 0.05
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Active = true
+    mainFrame.Parent = gui
+    
+    local corner = Instance.new("UICorner", mainFrame)
+    corner.CornerRadius = UDim.new(0, 10)
+    local stroke = Instance.new("UIStroke", mainFrame)
+    stroke.Color = Color3.fromRGB(100, 100, 255)
+    stroke.Thickness = 1.5
+
+    -- Top Bar
+    local topBar = Instance.new("Frame")
+    topBar.Size = UDim2.new(1, 0, 0, 40)
+    topBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    topBar.BorderSizePixel = 0
+    topBar.Parent = mainFrame
+    Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 10)
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -50, 1, 0)
+    title.Position = UDim2.fromOffset(15, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "MENTO HUB"
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Font = Enum.Font.GothamBlack
+    title.TextSize = 16
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = topBar
+
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.fromOffset(30, 30)
+    closeBtn.Position = UDim2.new(1, -35, 0, 5)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 14
+    closeBtn.BorderSizePixel = 0
+    closeBtn.Parent = topBar
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+    
+    -- Minimized button
+    local openBtn = Instance.new("TextButton")
+    openBtn.Size = UDim2.fromOffset(50, 50)
+    openBtn.Position = UDim2.new(0, 20, 0, 100)
+    openBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    openBtn.Text = "HUB"
+    openBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    openBtn.Font = Enum.Font.GothamBold
+    openBtn.TextSize = 14
+    openBtn.BorderSizePixel = 0
+    openBtn.Visible = false
+    openBtn.Parent = gui
+    Instance.new("UICorner", openBtn).CornerRadius = UDim.new(1, 0)
+    Instance.new("UIStroke", openBtn).Color = Color3.fromRGB(100, 100, 255)
+
+    -- Layout
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 10)
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = mainFrame
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 55)
+    pad.Parent = mainFrame
+
+    -- Toggles
+    local farmBtn = createToggle("AutoFarm", "AUTO FARM", 1)
+    local flyBtn  = createToggle("Fly", "FLY (Joystick)", 2)
+    local clipBtn = createToggle("NoClip", "NO CLIP", 3)
+    
+    local unloadBtn = Instance.new("TextButton")
+    unloadBtn.Size = UDim2.new(1, -20, 0, 35)
+    unloadBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+    unloadBtn.Text = "UNLOAD"
+    unloadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    unloadBtn.Font = Enum.Font.GothamBold
+    unloadBtn.TextSize = 14
+    unloadBtn.BorderSizePixel = 0
+    unloadBtn.LayoutOrder = 4
+    unloadBtn.Parent = mainFrame
+    Instance.new("UICorner", unloadBtn).CornerRadius = UDim.new(0, 6)
+
+    table.insert(uiConns, unloadBtn.MouseButton1Click:Connect(function()
+        if getgenv().MentoFarmUnload then getgenv().MentoFarmUnload() end
+    end))
+    
+    table.insert(uiConns, closeBtn.MouseButton1Click:Connect(function()
+        mainFrame.Visible = false
+        openBtn.Visible = true
+    end))
+    table.insert(uiConns, openBtn.MouseButton1Click:Connect(function()
+        mainFrame.Visible = true
+        openBtn.Visible = false
+    end))
+
+    -- Dragging logic
+    local dragging, dragInput, dragStart, startPos
+    table.insert(uiConns, topBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainFrame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end))
+    table.insert(uiConns, topBar.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local delta = input.Position - dragStart
+            mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end))
+
+    -- Auto Farm Logic Loop
+    farmBtn.MouseButton1Click:Connect(function()
+        if CONFIG.AutoFarm and not isFarming then
+            task.spawn(function()
+                isFarming = true
+                while CONFIG.AutoFarm do
+                    local char = player.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local target, targetHrp = nil, nil
+                        local dist = CONFIG.FarmDist
+                        -- Blox Fruits stores mobs in workspace.Enemies, fallback to all children if empty
+                        local folder = workspace:FindFirstChild("Enemies") or workspace
+                        for _, v in pairs(folder:GetChildren()) do
+                            if v:IsA("Model") and v ~= char and v:FindFirstChildOfClass("Humanoid") then
+                                local h = v:FindFirstChildOfClass("Humanoid")
+                                local r = v:FindFirstChild("HumanoidRootPart") or (v.PrimaryPart)
+                                if h and r and h.Health > 0 and not Players:GetPlayerFromCharacter(v) then
+                                    local d = (hrp.Position - r.Position).Magnitude
+                                    if d < dist then
+                                        dist = d
+                                        target = v
+                                        targetHrp = r
+                                    end
+                                end
+                            end
+                        end
+                        if target and targetHrp then
+                            hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 5, 0) -- Teleport above mob
+                            local tool = char:FindFirstChildOfClass("Tool")
+                            if tool then tool:Activate() end
+                            if firetouchinterest then
+                                pcall(firetouchinterest, hrp, targetHrp, 0)
+                                task.wait(0.05)
+                                pcall(firetouchinterest, hrp, targetHrp, 1)
+                            end
+                        end
+                    end
+                    task.wait(CONFIG.FarmRate)
+                end
+                isFarming = false
+            end)
+        end
+    end)
+end
+
+-- CORE LOGIC ---------------------------------------------------------
+local function flyStep(dt)
+    if not CONFIG.Fly then return end
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    
+    hum.PlatformStand = true
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+
+    -- Joystick direction
+    local move = hum.MoveDirection
+    -- Look up/down to fly vertically
+    local cam = workspace.CurrentCamera
+    if cam then
+        local look = cam.CFrame.LookVector
+        move += Vector3.new(0, look.Y, 0) * 2 -- Add vertical boost based on camera angle
+    end
+
+    if move.Magnitude > 0 then
+        move = move.Unit * CONFIG.FlySpeed
+    end
+    
+    vel = vel:Lerp(move, math.clamp(dt * 10, 0, 1))
+    hrp.CFrame = hrp.CFrame + vel * dt
+end
+
+RunService.Heartbeat:Connect(function()
+    if CONFIG.NoClip then
+        local char = player.Character
+        if char then
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end
+    end
+end)
+
+buildUI()
+RunService:BindToRenderStep(FLY_BIND, Enum.RenderPriority.Camera.Value + 1, flyStep)
+
+-- UNLOAD -------------------------------------------------------------
+local function unload()
+    RunService:UnbindFromRenderStep(FLY_BIND)
+    for _, c in ipairs(uiConns) do c:Disconnect() end
+    table.clear(uiConns)
+    for _, c in ipairs(conns) do c:Disconnect() end
+    table.clear(conns)
+    if gui then gui:Destroy() end
+    CONFIG.AutoFarm, CONFIG.Fly, CONFIG.NoClip = false, false, false
+    if getgenv().MentoFarmUnload == unload then getgenv().MentoFarmUnload = nil end
+    local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.PlatformStand = false end
+    print("[mento] hub unloaded")
+end
+getgenv().MentoFarmUnload = unload
+print("[mento] hub loaded :: drag the top bar to move the menu")
