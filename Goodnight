@@ -13,8 +13,8 @@ local CONFIG = {
     Hitbox   = false,
     FlySpeed = 120,
     FarmDist = 350,
-    HoverHeight = 6,      -- How high above the head you sit
-    HitboxSize  = 60,     -- Giant hitbox to sweep all mobs
+    HoverHeight = 6,
+    HitboxSize  = 60,
 }
 
 local Players    = game:GetService("Players")
@@ -27,7 +27,6 @@ local uiConns    = {}
 local vel        = Vector3.zero
 local gui, mainFrame
 local origSizes  = {}
-local isFarming  = false
 
 -- UI BUILDER ---------------------------------------------------------
 local function createToggle(name, text, layoutOrder)
@@ -111,7 +110,7 @@ local function buildUI()
     
     local openBtn = Instance.new("TextButton")
     openBtn.Size = UDim2.fromOffset(50, 50)
-    openBtn.Position = UDim2.new(1, -70, 0, 100) -- Top right so it doesn't block joystick
+    openBtn.Position = UDim2.new(1, -70, 0, 100)
     openBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
     openBtn.Text = "FARM"
     openBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -162,7 +161,6 @@ local function buildUI()
         openBtn.Visible = false
     end))
 
-    -- Dragging
     local dragging, dragStart, startPos
     table.insert(uiConns, topBar.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -233,48 +231,64 @@ local function flyStep(dt)
     hrp.CFrame = hrp.CFrame + vel * dt
 end
 
+-- MAIN FARM LOOP (OVERHEAD) ------------------------------------------
 task.spawn(function()
-    while task.wait(0.1) do
+    while task.wait(0.15) do
         if CONFIG.AutoFarm then
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local target, targetHrp = nil, nil
-                local dist = CONFIG.FarmDist
-                local folder = workspace:FindFirstChild("Enemies") or workspace
-                
-                for _, v in pairs(folder:GetChildren()) do
-                    if v:IsA("Model") and v ~= char and v:FindFirstChildOfClass("Humanoid") then
-                        local h = v:FindFirstChildOfClass("Humanoid")
-                        local r = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-                        if h and r and h.Health > 0 and not Players:GetPlayerFromCharacter(v) then
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            
+            if hrp and hum then
+                -- Scan for closest NPC
+                local bestTarget, bestHrp = nil, nil
+                local bestDist = CONFIG.FarmDist
+
+                for _, v in pairs(workspace:GetChildren()) do
+                    if v:IsA("Model") and v ~= char and v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart") then
+                        local h = v.Humanoid
+                        local r = v.HumanoidRootPart
+                        if h.Health > 0 and not Players:GetPlayerFromCharacter(v) then
                             local d = (hrp.Position - r.Position).Magnitude
-                            if d < dist then
-                                dist = d
-                                target = v
-                                targetHrp = r
+                            if d < bestDist then
+                                bestDist = d
+                                bestTarget = v
+                                bestHrp = r
                             end
                         end
                     end
                 end
-                
-                if target and targetHrp then
-                    -- Lock directly above the head
-                    hrp.CFrame = targetHrp.CFrame * CFrame.new(0, CONFIG.HoverHeight, 0)
+
+                if bestTarget and bestHrp then
+                    -- FREEZE PLAYER & TELEPORT ABOVE HEAD
+                    hum.PlatformStand = true
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
                     
-                    -- Mash attack
+                    hrp.CFrame = bestHrp.CFrame * CFrame.new(0, CONFIG.HoverHeight, 0)
+                    
+                    -- Wait a frame for server to register position
+                    task.wait(0.05)
+                    
+                    -- Hit
                     local tool = char:FindFirstChildOfClass("Tool")
                     if tool then 
                         pcall(function() tool:Activate() end) 
                     end
                     
-                    -- Touch event to hit them from above
                     if firetouchinterest then
-                        pcall(firetouchinterest, hrp, targetHrp, 0)
+                        pcall(firetouchinterest, hrp, bestHrp, 0)
                         task.wait(0.01)
-                        pcall(firetouchinterest, hrp, targetHrp, 1)
+                        pcall(firetouchinterest, hrp, bestHrp, 1)
                     end
                 end
+            end
+        else
+            -- Restore gravity if AutoFarm is off and Fly is off
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and not CONFIG.Fly then
+                hum.PlatformStand = false
             end
         end
     end
@@ -311,6 +325,7 @@ local function unload()
                 local handle = tool:FindFirstChild("Handle")
                 if handle and origSizes[handle] then
                     handle.Size = origSizes[handle]
+                    handle.Transparency = 0
                 end
             end
         end
@@ -324,4 +339,4 @@ local function unload()
 end
 getgenv().MentoFarmUnload = unload
 
-print("[mento] head farmer loaded :: UI on screen")
+print("[mento] head farmer loaded :: fixed overhead freeze")
