@@ -1,5 +1,5 @@
--- LUAU-OL :: Blox Fruits Mobile Hub (Auto-Farm + Fly + NoClip)
--- Purpose: Clean draggable UI for mobile. Teleports to nearby mobs, hits them, flies, and noclips.
+-- LUAU-OL :: Blox Fruits Overhead Auto-Farm + Hitbox + Fly + NoClip
+-- Purpose: Hovers directly above NPCs, expands your hitbox to hit them all, with mobile UI.
 -- Unload: Tap "UNLOAD" on the menu.
 -- MIT
 
@@ -10,23 +10,25 @@ local CONFIG = {
     AutoFarm = false,
     Fly      = false,
     NoClip   = false,
+    Hitbox   = false,
     FlySpeed = 120,
-    FarmDist = 300,
-    FarmRate = 0.2,
+    FarmDist = 400,
+    FarmRate = 0.15,
+    HeightOffset = 20, -- How high above the NPC you hover
+    HitboxSize   = 50, -- Size of your weapon hitbox
 }
 
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UIS        = game:GetService("UserInputService")
 local player     = Players.LocalPlayer
 if not player then return warn("[mento] no LocalPlayer, bailing") end
 
 local FLY_BIND   = "MentoHubFlyStep"
-local conns      = {}
 local uiConns    = {}
 local vel        = Vector3.zero
 local gui, mainFrame
 local isFarming  = false
+local origSizes  = {}
 
 -- UI BUILDER ---------------------------------------------------------
 local function createToggle(name, text, layoutOrder)
@@ -59,28 +61,25 @@ local function buildUI()
     local pg = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui")
     
     gui = Instance.new("ScreenGui")
-    gui.Name = "MentoMobileHub"
+    gui.Name = "MentoOverheadHub"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.Parent = pg
 
-    -- Main Window
     mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.fromOffset(220, 260)
-    mainFrame.Position = UDim2.new(0.5, -110, 0.3, 0) -- Center-ish on screen
+    mainFrame.Size = UDim2.fromOffset(220, 310)
+    mainFrame.Position = UDim2.new(0.5, -110, 0.3, 0)
     mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
     mainFrame.BackgroundTransparency = 0.05
     mainFrame.BorderSizePixel = 0
     mainFrame.Active = true
     mainFrame.Parent = gui
     
-    local corner = Instance.new("UICorner", mainFrame)
-    corner.CornerRadius = UDim.new(0, 10)
+    Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
     local stroke = Instance.new("UIStroke", mainFrame)
     stroke.Color = Color3.fromRGB(100, 100, 255)
     stroke.Thickness = 1.5
 
-    -- Top Bar
     local topBar = Instance.new("Frame")
     topBar.Size = UDim2.new(1, 0, 0, 40)
     topBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
@@ -92,7 +91,7 @@ local function buildUI()
     title.Size = UDim2.new(1, -50, 1, 0)
     title.Position = UDim2.fromOffset(15, 0)
     title.BackgroundTransparency = 1
-    title.Text = "MENTO HUB"
+    title.Text = "OVERHEAD HUB"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.Font = Enum.Font.GothamBlack
     title.TextSize = 16
@@ -111,7 +110,6 @@ local function buildUI()
     closeBtn.Parent = topBar
     Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
     
-    -- Minimized button
     local openBtn = Instance.new("TextButton")
     openBtn.Size = UDim2.fromOffset(50, 50)
     openBtn.Position = UDim2.new(0, 20, 0, 100)
@@ -126,7 +124,6 @@ local function buildUI()
     Instance.new("UICorner", openBtn).CornerRadius = UDim.new(1, 0)
     Instance.new("UIStroke", openBtn).Color = Color3.fromRGB(100, 100, 255)
 
-    -- Layout
     local layout = Instance.new("UIListLayout")
     layout.Padding = UDim.new(0, 10)
     layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -136,10 +133,10 @@ local function buildUI()
     pad.PaddingTop = UDim.new(0, 55)
     pad.Parent = mainFrame
 
-    -- Toggles
-    local farmBtn = createToggle("AutoFarm", "AUTO FARM", 1)
-    local flyBtn  = createToggle("Fly", "FLY (Joystick)", 2)
-    local clipBtn = createToggle("NoClip", "NO CLIP", 3)
+    createToggle("AutoFarm", "AUTO FARM (OVERHEAD)", 1)
+    createToggle("Hitbox", "HITBOX EXPANDER", 2)
+    createToggle("Fly", "FLY (JOYSTICK)", 3)
+    createToggle("NoClip", "NO CLIP", 4)
     
     local unloadBtn = Instance.new("TextButton")
     unloadBtn.Size = UDim2.new(1, -20, 0, 35)
@@ -149,7 +146,7 @@ local function buildUI()
     unloadBtn.Font = Enum.Font.GothamBold
     unloadBtn.TextSize = 14
     unloadBtn.BorderSizePixel = 0
-    unloadBtn.LayoutOrder = 4
+    unloadBtn.LayoutOrder = 5
     unloadBtn.Parent = mainFrame
     Instance.new("UICorner", unloadBtn).CornerRadius = UDim.new(0, 6)
 
@@ -166,8 +163,8 @@ local function buildUI()
         openBtn.Visible = false
     end))
 
-    -- Dragging logic
-    local dragging, dragInput, dragStart, startPos
+    -- Dragging
+    local dragging, dragStart, startPos
     table.insert(uiConns, topBar.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = true
@@ -184,54 +181,35 @@ local function buildUI()
             mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
     end))
-
-    -- Auto Farm Logic Loop
-    farmBtn.MouseButton1Click:Connect(function()
-        if CONFIG.AutoFarm and not isFarming then
-            task.spawn(function()
-                isFarming = true
-                while CONFIG.AutoFarm do
-                    local char = player.Character
-                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        local target, targetHrp = nil, nil
-                        local dist = CONFIG.FarmDist
-                        -- Blox Fruits stores mobs in workspace.Enemies, fallback to all children if empty
-                        local folder = workspace:FindFirstChild("Enemies") or workspace
-                        for _, v in pairs(folder:GetChildren()) do
-                            if v:IsA("Model") and v ~= char and v:FindFirstChildOfClass("Humanoid") then
-                                local h = v:FindFirstChildOfClass("Humanoid")
-                                local r = v:FindFirstChild("HumanoidRootPart") or (v.PrimaryPart)
-                                if h and r and h.Health > 0 and not Players:GetPlayerFromCharacter(v) then
-                                    local d = (hrp.Position - r.Position).Magnitude
-                                    if d < dist then
-                                        dist = d
-                                        target = v
-                                        targetHrp = r
-                                    end
-                                end
-                            end
-                        end
-                        if target and targetHrp then
-                            hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 5, 0) -- Teleport above mob
-                            local tool = char:FindFirstChildOfClass("Tool")
-                            if tool then tool:Activate() end
-                            if firetouchinterest then
-                                pcall(firetouchinterest, hrp, targetHrp, 0)
-                                task.wait(0.05)
-                                pcall(firetouchinterest, hrp, targetHrp, 1)
-                            end
-                        end
-                    end
-                    task.wait(CONFIG.FarmRate)
-                end
-                isFarming = false
-            end)
-        end
-    end)
 end
 
--- CORE LOGIC ---------------------------------------------------------
+-- HITBOX EXPANDER ----------------------------------------------------
+local function applyHitbox()
+    local char = player.Character
+    if not char then return end
+    for _, tool in ipairs(char:GetChildren()) do
+        if tool:IsA("Tool") then
+            local handle = tool:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then
+                if CONFIG.Hitbox then
+                    if not origSizes[handle] then
+                        origSizes[handle] = handle.Size
+                    end
+                    handle.Size = Vector3.new(CONFIG.HitboxSize, CONFIG.HitboxSize, CONFIG.HitboxSize)
+                    handle.Transparency = 0.7
+                else
+                    if origSizes[handle] then
+                        handle.Size = origSizes[handle]
+                        handle.Transparency = 0
+                        origSizes[handle] = nil
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- CORE LOOPS ---------------------------------------------------------
 local function flyStep(dt)
     if not CONFIG.Fly then return end
     local char = player.Character
@@ -243,13 +221,11 @@ local function flyStep(dt)
     hrp.AssemblyLinearVelocity = Vector3.zero
     hrp.AssemblyAngularVelocity = Vector3.zero
 
-    -- Joystick direction
     local move = hum.MoveDirection
-    -- Look up/down to fly vertically
     local cam = workspace.CurrentCamera
     if cam then
         local look = cam.CFrame.LookVector
-        move += Vector3.new(0, look.Y, 0) * 2 -- Add vertical boost based on camera angle
+        move += Vector3.new(0, look.Y, 0) * 2
     end
 
     if move.Magnitude > 0 then
@@ -260,15 +236,66 @@ local function flyStep(dt)
     hrp.CFrame = hrp.CFrame + vel * dt
 end
 
-RunService.Heartbeat:Connect(function()
-    if CONFIG.NoClip then
-        local char = player.Character
-        if char then
-            for _, p in ipairs(char:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = false end
+-- MAIN FARM LOOP (OVERHEAD) ------------------------------------------
+task.spawn(function()
+    while true do
+        task.wait(CONFIG.FarmRate)
+        if CONFIG.AutoFarm then
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local target, targetHrp = nil, nil
+                local dist = CONFIG.FarmDist
+                local folder = workspace:FindFirstChild("Enemies") or workspace
+                
+                for _, v in pairs(folder:GetChildren()) do
+                    if v:IsA("Model") and v ~= char and v:FindFirstChildOfClass("Humanoid") then
+                        local h = v:FindFirstChildOfClass("Humanoid")
+                        local r = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                        if h and r and h.Health > 0 and not Players:GetPlayerFromCharacter(v) then
+                            local d = (hrp.Position - r.Position).Magnitude
+                            if d < dist then
+                                dist = d
+                                target = v
+                                targetHrp = r
+                            end
+                        end
+                    end
+                end
+                
+                if target and targetHrp then
+                    -- Teleport DIRECTLY ABOVE the NPC's head
+                    hrp.CFrame = targetHrp.CFrame * CFrame.new(0, CONFIG.HeightOffset, 0)
+                    
+                    -- Attack
+                    local tool = char:FindFirstChildOfClass("Tool")
+                    if tool then 
+                        pcall(function() tool:Activate() end) 
+                    end
+                    
+                    if firetouchinterest then
+                        pcall(firetouchinterest, hrp, targetHrp, 0)
+                        task.wait(0.01)
+                        pcall(firetouchinterest, hrp, targetHrp, 1)
+                    end
+                end
             end
         end
     end
+end)
+
+-- MAIN RENDER/HEARTBEAT ----------------------------------------------
+RunService.Heartbeat:Connect(function()
+    local char = player.Character
+    if not char then return end
+    
+    if CONFIG.NoClip then
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+    
+    applyHitbox()
 end)
 
 buildUI()
@@ -279,14 +306,27 @@ local function unload()
     RunService:UnbindFromRenderStep(FLY_BIND)
     for _, c in ipairs(uiConns) do c:Disconnect() end
     table.clear(uiConns)
-    for _, c in ipairs(conns) do c:Disconnect() end
-    table.clear(conns)
     if gui then gui:Destroy() end
-    CONFIG.AutoFarm, CONFIG.Fly, CONFIG.NoClip = false, false, false
+    CONFIG.AutoFarm, CONFIG.Fly, CONFIG.NoClip, CONFIG.Hitbox = false, false, false, false
+    
+    local char = player.Character
+    if char then
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") then
+                local handle = tool:FindFirstChild("Handle")
+                if handle and origSizes[handle] then
+                    handle.Size = origSizes[handle]
+                end
+            end
+        end
+    end
+    table.clear(origSizes)
+
     if getgenv().MentoFarmUnload == unload then getgenv().MentoFarmUnload = nil end
-    local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then hum.PlatformStand = false end
-    print("[mento] hub unloaded")
+    print("[mento] overhead hub unloaded")
 end
 getgenv().MentoFarmUnload = unload
-print("[mento] hub loaded :: drag the top bar to move the menu")
+
+print("[mento] loaded :: overhead farm active")
