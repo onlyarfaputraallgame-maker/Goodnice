@@ -1,5 +1,5 @@
--- LUAU-OL :: Blox Fruits Overhead Auto-Farm + Hitbox + Fly + NoClip
--- Purpose: Hovers directly above NPCs, expands your hitbox to hit them all, with mobile UI.
+-- LUAU-OL :: Blox Fruits Head-Hover Auto-Farm + UI
+-- Purpose: Hovers directly above the NPC's head, expands hitbox, and auto-attacks.
 -- Unload: Tap "UNLOAD" on the menu.
 -- MIT
 
@@ -12,10 +12,9 @@ local CONFIG = {
     NoClip   = false,
     Hitbox   = false,
     FlySpeed = 120,
-    FarmDist = 400,
-    FarmRate = 0.15,
-    HeightOffset = 20, -- How high above the NPC you hover
-    HitboxSize   = 50, -- Size of your weapon hitbox
+    FarmDist = 350,
+    HoverHeight = 6,      -- How high above the head you sit
+    HitboxSize  = 60,     -- Giant hitbox to sweep all mobs
 }
 
 local Players    = game:GetService("Players")
@@ -27,8 +26,8 @@ local FLY_BIND   = "MentoHubFlyStep"
 local uiConns    = {}
 local vel        = Vector3.zero
 local gui, mainFrame
-local isFarming  = false
 local origSizes  = {}
+local isFarming  = false
 
 -- UI BUILDER ---------------------------------------------------------
 local function createToggle(name, text, layoutOrder)
@@ -38,7 +37,7 @@ local function createToggle(name, text, layoutOrder)
     btn.Text = text .. " : OFF"
     btn.TextColor3 = Color3.fromRGB(200, 200, 200)
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 15
+    btn.TextSize = 14
     btn.BorderSizePixel = 0
     btn.LayoutOrder = layoutOrder
     btn.Parent = mainFrame
@@ -61,14 +60,14 @@ local function buildUI()
     local pg = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui")
     
     gui = Instance.new("ScreenGui")
-    gui.Name = "MentoOverheadHub"
+    gui.Name = "MentoHeadHub"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.Parent = pg
 
     mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.fromOffset(220, 310)
-    mainFrame.Position = UDim2.new(0.5, -110, 0.3, 0)
+    mainFrame.Size = UDim2.fromOffset(220, 280)
+    mainFrame.Position = UDim2.new(0.5, -110, 0.5, -140)
     mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
     mainFrame.BackgroundTransparency = 0.05
     mainFrame.BorderSizePixel = 0
@@ -77,7 +76,7 @@ local function buildUI()
     
     Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
     local stroke = Instance.new("UIStroke", mainFrame)
-    stroke.Color = Color3.fromRGB(100, 100, 255)
+    stroke.Color = Color3.fromRGB(255, 50, 50)
     stroke.Thickness = 1.5
 
     local topBar = Instance.new("Frame")
@@ -91,7 +90,7 @@ local function buildUI()
     title.Size = UDim2.new(1, -50, 1, 0)
     title.Position = UDim2.fromOffset(15, 0)
     title.BackgroundTransparency = 1
-    title.Text = "OVERHEAD HUB"
+    title.Text = "HEAD FARMER"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.Font = Enum.Font.GothamBlack
     title.TextSize = 16
@@ -112,30 +111,30 @@ local function buildUI()
     
     local openBtn = Instance.new("TextButton")
     openBtn.Size = UDim2.fromOffset(50, 50)
-    openBtn.Position = UDim2.new(0, 20, 0, 100)
+    openBtn.Position = UDim2.new(1, -70, 0, 100) -- Top right so it doesn't block joystick
     openBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    openBtn.Text = "HUB"
+    openBtn.Text = "FARM"
     openBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     openBtn.Font = Enum.Font.GothamBold
-    openBtn.TextSize = 14
+    openBtn.TextSize = 12
     openBtn.BorderSizePixel = 0
     openBtn.Visible = false
     openBtn.Parent = gui
     Instance.new("UICorner", openBtn).CornerRadius = UDim.new(1, 0)
-    Instance.new("UIStroke", openBtn).Color = Color3.fromRGB(100, 100, 255)
+    Instance.new("UIStroke", openBtn).Color = Color3.fromRGB(255, 50, 50)
 
     local layout = Instance.new("UIListLayout")
-    layout.Padding = UDim.new(0, 10)
+    layout.Padding = UDim.new(0, 8)
     layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Parent = mainFrame
     local pad = Instance.new("UIPadding")
-    pad.PaddingTop = UDim.new(0, 55)
+    pad.PaddingTop = UDim.new(0, 50)
     pad.Parent = mainFrame
 
-    createToggle("AutoFarm", "AUTO FARM (OVERHEAD)", 1)
-    createToggle("Hitbox", "HITBOX EXPANDER", 2)
-    createToggle("Fly", "FLY (JOYSTICK)", 3)
+    createToggle("AutoFarm", "AUTO HIT (HEAD)", 1)
+    createToggle("Hitbox", "GIANT HITBOX", 2)
+    createToggle("Fly", "FLY", 3)
     createToggle("NoClip", "NO CLIP", 4)
     
     local unloadBtn = Instance.new("TextButton")
@@ -183,7 +182,7 @@ local function buildUI()
     end))
 end
 
--- HITBOX EXPANDER ----------------------------------------------------
+-- HITBOX -------------------------------------------------------------
 local function applyHitbox()
     local char = player.Character
     if not char then return end
@@ -192,9 +191,7 @@ local function applyHitbox()
             local handle = tool:FindFirstChild("Handle")
             if handle and handle:IsA("BasePart") then
                 if CONFIG.Hitbox then
-                    if not origSizes[handle] then
-                        origSizes[handle] = handle.Size
-                    end
+                    if not origSizes[handle] then origSizes[handle] = handle.Size end
                     handle.Size = Vector3.new(CONFIG.HitboxSize, CONFIG.HitboxSize, CONFIG.HitboxSize)
                     handle.Transparency = 0.7
                 else
@@ -236,10 +233,8 @@ local function flyStep(dt)
     hrp.CFrame = hrp.CFrame + vel * dt
 end
 
--- MAIN FARM LOOP (OVERHEAD) ------------------------------------------
 task.spawn(function()
-    while true do
-        task.wait(CONFIG.FarmRate)
+    while task.wait(0.1) do
         if CONFIG.AutoFarm then
             local char = player.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -264,15 +259,16 @@ task.spawn(function()
                 end
                 
                 if target and targetHrp then
-                    -- Teleport DIRECTLY ABOVE the NPC's head
-                    hrp.CFrame = targetHrp.CFrame * CFrame.new(0, CONFIG.HeightOffset, 0)
+                    -- Lock directly above the head
+                    hrp.CFrame = targetHrp.CFrame * CFrame.new(0, CONFIG.HoverHeight, 0)
                     
-                    -- Attack
+                    -- Mash attack
                     local tool = char:FindFirstChildOfClass("Tool")
                     if tool then 
                         pcall(function() tool:Activate() end) 
                     end
                     
+                    -- Touch event to hit them from above
                     if firetouchinterest then
                         pcall(firetouchinterest, hrp, targetHrp, 0)
                         task.wait(0.01)
@@ -284,7 +280,6 @@ task.spawn(function()
     end
 end)
 
--- MAIN RENDER/HEARTBEAT ----------------------------------------------
 RunService.Heartbeat:Connect(function()
     local char = player.Character
     if not char then return end
@@ -325,8 +320,8 @@ local function unload()
     if getgenv().MentoFarmUnload == unload then getgenv().MentoFarmUnload = nil end
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then hum.PlatformStand = false end
-    print("[mento] overhead hub unloaded")
+    print("[mento] head farmer unloaded")
 end
 getgenv().MentoFarmUnload = unload
 
-print("[mento] loaded :: overhead farm active")
+print("[mento] head farmer loaded :: UI on screen")
